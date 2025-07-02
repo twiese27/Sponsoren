@@ -1,8 +1,8 @@
-from flask import Flask, render_template_string, request, redirect, url_for, jsonify
-import sqlite3
+from flask import Blueprint, render_template_string, request, redirect, url_for, session, jsonify, flash
+from db import get_db_connection, get_current_user
 import math
 
-app = Flask(__name__)
+sponsoren_bp = Blueprint('sponsoren', __name__)
 
 PER_PAGE_CHOICES = [10, 25, 50, 100, 500]
 
@@ -18,20 +18,42 @@ HTML = """
         form label { display: inline-block; width: 120px; font-weight: bold; }
         form input[type=text], form textarea { width: 250px; padding: 4px; border: 1px solid #ccc; border-radius: 3px; }
         form textarea { height: 40px; resize: vertical; }
-        form input[type=submit] { padding: 6px 18px; background: #4CAF50; color: #fff; border: none; border-radius: 3px; cursor: pointer; }
-        form input[type=submit]:hover { background: #388e3c; }
+        form input[type=submit], button { padding: 6px 18px; background: #4CAF50; color: #fff; border: none; border-radius: 3px; cursor: pointer; }
+        form input[type=submit]:hover, button:hover { background: #388e3c; }
         .legend { margin-bottom: 15px; font-size: 14px; }
         .legend .color-box { display: inline-block; width: 20px; height: 20px; background-color: #ffcccc; border: 1px solid #cc0000; vertical-align: middle; margin-right: 8px; }
         table { border-collapse: collapse; width: 100%; }
         th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
         thead th { position: sticky; top: 0; background-color: #f2f2f2; z-index: 10; box-shadow: 0 2px 2px -1px rgba(0,0,0,0.4);}
         tr.nie-mehr-anfragen { background-color: #ffcccc; }
+        tr.nicht-validiert { background-color: #e3f2fd; }
         .pagination { margin: 20px 0; text-align: center; }
         .pagination a, .pagination span { display: inline-block; padding: 6px 12px; margin: 0 2px; border: 1px solid #ccc; border-radius: 3px; text-decoration: none; color: #333; }
         .pagination .current { background: #4CAF50; color: #fff; border-color: #388e3c; }
         .per-page-form { display: inline-block; margin: 0 15px; }
         td.editing { background: #ffe; }
         input[type="radio"] { margin-left: 10px; margin-right: 2px; }
+        .userbox {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            background: #f8f8f8;
+            padding: 7px 14px;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+            font-size: 15px;
+            z-index: 100;
+        }
+        @media (max-width: 700px) {
+            .userbox {
+                position: static;
+                float: none;
+                margin: 10px 0;
+                display: block;
+                width: auto;
+                box-shadow: none;
+            }
+        }
     </style>
     <script>
     document.addEventListener('DOMContentLoaded', () => {
@@ -133,6 +155,13 @@ HTML = """
     </script>
 </head>
 <body>
+    <div class="userbox">
+        {% if current_user %}
+            Eingeloggt als: <b>{{ current_user['vorname'] }} {{ current_user['nachname'] }}</b> ({{ current_user['rolle'] }}) |
+            <a href="{{ url_for('login.logout') }}">Logout</a>
+        {% endif %}
+    </div>
+    <h1>Sponsorenverwaltung</h1>
 
     <!-- Eingabeformular -->
     <form method="post">
@@ -173,7 +202,35 @@ HTML = """
     <div class="legend">
         <span class="color-box"></span>
         Sponsoren wurden angefragt und haben weder jetzt noch in Zukunft Interesse an einem Sponsoring.
+        <span style="display:inline-block; width:20px; height:20px; background:#e3f2fd; border:1px solid #90caf9; margin-left:20px; vertical-align:middle;"></span>
+        Noch nicht validierte Sponsoren
     </div>
+
+    <!-- Filterformular -->
+    <form method="get" style="margin-bottom: 20px;">
+        <input type="text" name="search" placeholder="Nach Name suchen..." value="{{ search|default('') }}">
+        <label style="margin-left:15px;">Angefragt:
+            <select name="f_angefragt">
+                <option value="">Alle</option>
+                <option value="1" {% if f_angefragt == '1' %}selected{% endif %}>Ja</option>
+                <option value="0" {% if f_angefragt == '0' %}selected{% endif %}>Nein</option>
+            </select>
+        </label>
+        <label style="margin-left:10px;">Rückmeldung:
+            <select name="f_rueckmeldung">
+                <option value="">Alle</option>
+                <option value="1" {% if f_rueckmeldung == '1' %}selected{% endif %}>Ja</option>
+                <option value="0" {% if f_rueckmeldung == '0' %}selected{% endif %}>Nein</option>
+            </select>
+        </label>
+        <label style="margin-left:10px;">Sponsor Ja/Nein:
+            <select name="f_sponsor_ja_nein">
+                <option value="">Alle</option>
+                <option value="1" {% if f_sponsor_ja_nein == '1' %}selected{% endif %}>Ja</option>
+                <option value="0" {% if f_sponsor_ja_nein == '0' %}selected{% endif %}>Nein</option>
+            </select>
+        </label>
+    </form>
 
     <!-- Pagination und Per-Page Auswahl oben -->
     <div class="pagination">
@@ -185,12 +242,16 @@ HTML = """
                 {% endfor %}
             </select>
             <input type="hidden" name="page" value="1">
+            {% if search %}<input type="hidden" name="search" value="{{ search }}">{% endif %}
+            {% if f_angefragt %}<input type="hidden" name="f_angefragt" value="{{ f_angefragt }}">{% endif %}
+            {% if f_rueckmeldung %}<input type="hidden" name="f_rueckmeldung" value="{{ f_rueckmeldung }}">{% endif %}
+            {% if f_sponsor_ja_nein %}<input type="hidden" name="f_sponsor_ja_nein" value="{{ f_sponsor_ja_nein }}">{% endif %}
         </form>
         {% for p in range(1, total_pages+1) %}
             {% if p == page %}
                 <span class="current">{{p}}</span>
             {% else %}
-                <a href="?page={{p}}&per_page={{per_page}}">{{p}}</a>
+                <a href="?page={{p}}&per_page={{per_page}}{% if search %}&search={{ search }}{% endif %}{% if f_angefragt %}&f_angefragt={{ f_angefragt }}{% endif %}{% if f_rueckmeldung %}&f_rueckmeldung={{ f_rueckmeldung }}{% endif %}{% if f_sponsor_ja_nein %}&f_sponsor_ja_nein={{ f_sponsor_ja_nein }}{% endif %}">{{p}}</a>
             {% endif %}
         {% endfor %}
     </div>
@@ -210,11 +271,13 @@ HTML = """
                 <th>Gegenleistung</th>
                 <th>Was</th>
                 <th>Sponsoring 2024</th>
+                <th>Validiert</th>
             </tr>
         </thead>
         <tbody>
             {% for sponsor in sponsoren %}
-            <tr data-id="{{ sponsor.id }}" class="{% if sponsor.nie_mehr_anfragen %}nie-mehr-anfragen{% endif %}">
+            <tr data-id="{{ sponsor.id }}"
+                class="{% if sponsor.nie_mehr_anfragen %}nie-mehr-anfragen{% endif %} {% if not sponsor.validiert %}nicht-validiert{% endif %}">
                 <td>{{ sponsor.id }}</td>
                 <td data-field="name">{{ sponsor.name }}</td>
                 <td data-field="adresse">{{ sponsor.adresse | replace('\n', '<br>') | safe }}</td>
@@ -232,6 +295,17 @@ HTML = """
                 <td data-field="gegenleistung">{{ sponsor.gegenleistung }}</td>
                 <td data-field="was">{{ sponsor.was }}</td>
                 <td data-field="sponsoring_2024">{{ sponsor.sponsoring_2024 }}</td>
+                <td>
+                    {% if not sponsor.validiert and current_user and current_user['rolle'] == 'OB-Person' %}
+                        <form method="post" action="{{ url_for('sponsoren.validate_sponsor', sponsor_id=sponsor.id) }}{% if search %}?search={{ search }}{% endif %}{% if f_angefragt %}&f_angefragt={{ f_angefragt }}{% endif %}{% if f_rueckmeldung %}&f_rueckmeldung={{ f_rueckmeldung }}{% endif %}{% if f_sponsor_ja_nein %}&f_sponsor_ja_nein={{ f_sponsor_ja_nein }}{% endif %}">
+                            <button type="submit">Validieren</button>
+                        </form>
+                    {% elif sponsor.validiert %}
+                        ✅
+                    {% else %}
+                        ❌
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>
@@ -247,24 +321,23 @@ HTML = """
                 {% endfor %}
             </select>
             <input type="hidden" name="page" value="1">
+            {% if search %}<input type="hidden" name="search" value="{{ search }}">{% endif %}
+            {% if f_angefragt %}<input type="hidden" name="f_angefragt" value="{{ f_angefragt }}">{% endif %}
+            {% if f_rueckmeldung %}<input type="hidden" name="f_rueckmeldung" value="{{ f_rueckmeldung }}">{% endif %}
+            {% if f_sponsor_ja_nein %}<input type="hidden" name="f_sponsor_ja_nein" value="{{ f_sponsor_ja_nein }}">{% endif %}
         </form>
         {% for p in range(1, total_pages+1) %}
             {% if p == page %}
                 <span class="current">{{p}}</span>
             {% else %}
-                <a href="?page={{p}}&per_page={{per_page}}">{{p}}</a>
+                <a href="?page={{p}}&per_page={{per_page}}{% if search %}&search={{ search }}{% endif %}{% if f_angefragt %}&f_angefragt={{ f_angefragt }}{% endif %}{% if f_rueckmeldung %}&f_rueckmeldung={{ f_rueckmeldung }}{% endif %}{% if f_sponsor_ja_nein %}&f_sponsor_ja_nein={{ f_sponsor_ja_nein }}{% endif %}">{{p}}</a>
             {% endif %}
         {% endfor %}
     </div>
-
 </body>
 </html>
 """
 
-def get_db_connection():
-    conn = sqlite3.connect('sponsoren.db')
-    conn.row_factory = sqlite3.Row
-    return conn
 
 def bool_and_info(val):
     if val is None:
@@ -280,8 +353,10 @@ def bool_and_info(val):
         return 0, val
     return 0, val
 
-@app.route('/', methods=['GET', 'POST'])
+
+@sponsoren_bp.route('/', methods=['GET', 'POST'])
 def index():
+    current_user = get_current_user()
     if request.method == 'POST':
         name = request.form['name']
         adresse = request.form.get('adresse', '')
@@ -305,25 +380,30 @@ def index():
             info_parts.append(f"Rückmeldung: {rueckmeldung_info}")
         info = " | ".join(info_parts)
 
+        validiert = 0  # Neue Sponsoren sind nicht validiert
+
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO sponsor (
-                name, adresse, wichtig, angefragt, rueckmeldung, sponsor_ja_nein,
-                info, gegenleistung, was, sponsoring_2024
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            name, adresse, wichtig, angefragt_bool, rueckmeldung_bool, sponsor_bool,
-            info, gegenleistung, was, sponsoring_2024
-        ))
+                       INSERT INTO sponsor (name, adresse, wichtig, angefragt, rueckmeldung, sponsor_ja_nein,
+                                            info, gegenleistung, was, sponsoring_2024, validiert)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       """, (
+                           name, adresse, wichtig, angefragt_bool, rueckmeldung_bool, sponsor_bool,
+                           info, gegenleistung, was, sponsoring_2024, validiert
+                       ))
         sponsor_id = cursor.lastrowid
         for mail in emails:
             cursor.execute("INSERT INTO mailadresse (sponsor_id, mail) VALUES (?, ?)", (sponsor_id, mail))
         conn.commit()
         conn.close()
-        return redirect(url_for('index'))
+        return redirect(url_for('sponsoren.index'))
 
-    # Pagination Parameter
+    # --- Filter auslesen ---
+    search = request.args.get('search', '').strip()
+    f_angefragt = request.args.get('f_angefragt', '')
+    f_rueckmeldung = request.args.get('f_rueckmeldung', '')
+    f_sponsor_ja_nein = request.args.get('f_sponsor_ja_nein', '')
     try:
         page = int(request.args.get('page', 1))
     except ValueError:
@@ -335,23 +415,45 @@ def index():
     if per_page not in PER_PAGE_CHOICES:
         per_page = 25
 
+    # Query dynamisch bauen
+    where = []
+    params = []
+    if search:
+        where.append("name LIKE ?")
+        params.append(f"%{search}%")
+    if f_angefragt in ('0', '1'):
+        where.append("angefragt = ?")
+        params.append(int(f_angefragt))
+    if f_rueckmeldung in ('0', '1'):
+        where.append("rueckmeldung = ?")
+        params.append(int(f_rueckmeldung))
+    if f_sponsor_ja_nein in ('0', '1'):
+        where.append("sponsor_ja_nein = ?")
+        params.append(int(f_sponsor_ja_nein))
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    count_sql = f"SELECT COUNT(*) FROM sponsor {where_sql}"
+    select_sql = f"SELECT * FROM sponsor {where_sql} ORDER BY id LIMIT ? OFFSET ?"
+
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM sponsor")
+    cursor.execute(count_sql, params)
     total_count = cursor.fetchone()[0]
     total_pages = max(1, math.ceil(total_count / per_page))
     if page < 1:
         page = 1
     if page > total_pages:
         page = total_pages
-
     offset = (page - 1) * per_page
+
+    params_with_limit = params + [per_page, offset]
+    rows = cursor.execute(select_sql, params_with_limit).fetchall()
+
     sponsoren = []
-    for sponsor_row in cursor.execute(
-        "SELECT * FROM sponsor ORDER BY id LIMIT ? OFFSET ?", (per_page, offset)
-    ).fetchall():
+    for sponsor_row in rows:
         sponsor = dict(sponsor_row)
-        emails = [row['mail'] for row in cursor.execute("SELECT mail FROM mailadresse WHERE sponsor_id = ?", (sponsor['id'],))]
+        emails = [row['mail'] for row in
+                  cursor.execute("SELECT mail FROM mailadresse WHERE sponsor_id = ?", (sponsor['id'],))]
         sponsor['emails'] = emails
         sponsoren.append(sponsor)
     conn.close()
@@ -362,17 +464,36 @@ def index():
         page=page,
         per_page=per_page,
         total_pages=total_pages,
-        per_page_choices=PER_PAGE_CHOICES
+        per_page_choices=PER_PAGE_CHOICES,
+        search=search,
+        f_angefragt=f_angefragt,
+        f_rueckmeldung=f_rueckmeldung,
+        f_sponsor_ja_nein=f_sponsor_ja_nein,
+        current_user=current_user
     )
 
-@app.route('/edit', methods=['POST'])
+
+@sponsoren_bp.route('/validate/<int:sponsor_id>', methods=['POST'])
+def validate_sponsor(sponsor_id):
+    user = get_current_user()
+    if not user or user['rolle'] != 'OB-Person':
+        return "Nicht erlaubt", 403
+    conn = get_db_connection()
+    conn.execute("UPDATE sponsor SET validiert=1 WHERE id=?", (sponsor_id,))
+    conn.commit()
+    conn.close()
+    return redirect(request.referrer or url_for('sponsoren.index'))
+
+
+@sponsoren_bp.route('/edit', methods=['POST'])
 def edit_cell():
     data = request.get_json()
     sponsor_id = data.get('id')
     field = data.get('field')
     value = data.get('value')
 
-    allowed_fields = {'name', 'adresse', 'wichtig', 'angefragt', 'rueckmeldung', 'sponsor_ja_nein', 'info', 'gegenleistung', 'was', 'sponsoring_2024'}
+    allowed_fields = {'name', 'adresse', 'wichtig', 'angefragt', 'rueckmeldung', 'sponsor_ja_nein', 'info',
+                      'gegenleistung', 'was', 'sponsoring_2024'}
     if field not in allowed_fields:
         return jsonify({'error': 'Ungültiges Feld'}), 400
 
@@ -392,6 +513,3 @@ def edit_cell():
         return jsonify({'error': str(e)}), 500
     conn.close()
     return jsonify({'success': True})
-
-if __name__ == '__main__':
-    app.run(debug=True)

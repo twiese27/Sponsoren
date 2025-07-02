@@ -63,21 +63,17 @@ def extract_name_and_address_heuristik(text):
         return "", ""
 
 def bool_and_info(val):
-    """Gibt (bool, info) zurück, wenn val ein boolescher Wert ist, sonst Zusatzinfo"""
     if pd.isna(val):
         return 0, ""
     s = str(val).strip().lower()
-    # Akzeptiere Varianten für Ja/Nein
     if s in ["ja", "yes", "y", "1", "true"]:
         return 1, ""
     if s in ["nein", "no", "n", "0", "false"]:
         return 0, ""
-    # Enthält "ja" oder "nein" am Anfang, dann bool entsprechend, Rest als Info
     if s.startswith("ja"):
         return 1, val
     if s.startswith("nein"):
         return 0, val
-    # Sonst: Info, Bool auf 0
     return 0, val
 
 # Excel einlesen (Daten)
@@ -107,7 +103,25 @@ cursor = conn.cursor()
 
 cursor.execute("DROP TABLE IF EXISTS sponsor")
 cursor.execute("DROP TABLE IF EXISTS mailadresse")
+cursor.execute("DROP TABLE IF EXISTS user")
+cursor.execute("DROP TABLE IF EXISTS rolle")
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS rolle (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL
+)
+""")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS user (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vorname TEXT NOT NULL,
+    nachname TEXT NOT NULL,
+    mail TEXT NOT NULL,
+    rolle_id INTEGER NOT NULL,
+    FOREIGN KEY (rolle_id) REFERENCES rolle(id)
+)
+""")
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS sponsor (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,7 +135,8 @@ CREATE TABLE IF NOT EXISTS sponsor (
     gegenleistung TEXT,
     was TEXT,
     sponsoring_2024 TEXT,
-    nie_mehr_anfragen INTEGER
+    nie_mehr_anfragen INTEGER,
+    validiert INTEGER DEFAULT 1
 )
 """)
 cursor.execute("""
@@ -132,6 +147,14 @@ CREATE TABLE IF NOT EXISTS mailadresse (
     FOREIGN KEY(sponsor_id) REFERENCES sponsor(id)
 )
 """)
+# Rollen eintragen
+cursor.execute("INSERT OR IGNORE INTO rolle (name) VALUES ('OB-Person')")
+cursor.execute("INSERT OR IGNORE INTO rolle (name) VALUES ('Normal')")
+
+# Beispiel-User eintragen (Demo)
+cursor.execute("INSERT OR IGNORE INTO user (vorname, nachname, mail, rolle_id) VALUES ('Tjade', 'Wiese', 'tjade.wiese@gmail.com', 2)")
+cursor.execute("INSERT OR IGNORE INTO user (vorname, nachname, mail, rolle_id) VALUES ('Obleute', 'Admin', 'studentenreitgruppeoldenburg@gmail.com', 1)")
+
 conn.commit()
 
 for idx, row in df.iterrows():
@@ -144,7 +167,6 @@ for idx, row in df.iterrows():
     sponsor_bool, sponsor_info = bool_and_info(row.get('Sponsor Ja?/Nein?', ''))
     rueckmeldung_bool, rueckmeldung_info = bool_and_info(row.get('Rückmeldung?', ''))
 
-    # Zusatzinfos bündeln, falls vorhanden
     info_parts = []
     if angefragt_info:
         info_parts.append(f"Angefragt: {angefragt_info}")
@@ -154,10 +176,12 @@ for idx, row in df.iterrows():
         info_parts.append(f"Rückmeldung: {rueckmeldung_info}")
     info = " | ".join(info_parts)
 
+    validiert = 1  # Excel-Sponsoren sind validiert
+
     cursor.execute("""
         INSERT INTO sponsor (
-            name, adresse, wichtig, angefragt, sponsor_ja_nein, rueckmeldung, info, gegenleistung, was, sponsoring_2024, nie_mehr_anfragen
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            name, adresse, wichtig, angefragt, sponsor_ja_nein, rueckmeldung, info, gegenleistung, was, sponsoring_2024, nie_mehr_anfragen, validiert
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         name,
         adresse,
@@ -169,7 +193,8 @@ for idx, row in df.iterrows():
         row.get('Gegenleistung?', ''),
         row.get('Was?', ''),
         row.get('Sponsoring 2024', ''),
-        nie_mehr_anfragen
+        nie_mehr_anfragen,
+        validiert
     ))
     sponsor_id = cursor.lastrowid
     for mail in emails:
@@ -177,4 +202,4 @@ for idx, row in df.iterrows():
 
 conn.commit()
 conn.close()
-print("Fertig! Boolesche Werte und Zusatzinfos werden jetzt korrekt verarbeitet.")
+print("Fertig! Datenbank mit Usern (inkl. Mailadresse), Rollen und validierten Sponsoren erstellt.")
