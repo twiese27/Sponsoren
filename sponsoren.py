@@ -230,6 +230,15 @@ HTML = """
                 <option value="0" {% if f_sponsor_ja_nein == '0' %}selected{% endif %}>Nein</option>
             </select>
         </label>
+        <label style="margin-left:10px;">Validiert:
+            <select name="f_validiert">
+                <option value="">Alle</option>
+                <option value="1" {% if f_validiert == '1' %}selected{% endif %}>Ja</option>
+                <option value="0" {% if f_validiert == '0' %}selected{% endif %}>Nein</option>
+            </select>
+        </label>
+        <input type="hidden" name="per_page" value="{{ per_page }}">
+        <button type="submit">Filtern</button>
     </form>
 
     <!-- Pagination und Per-Page Auswahl oben -->
@@ -246,12 +255,13 @@ HTML = """
             {% if f_angefragt %}<input type="hidden" name="f_angefragt" value="{{ f_angefragt }}">{% endif %}
             {% if f_rueckmeldung %}<input type="hidden" name="f_rueckmeldung" value="{{ f_rueckmeldung }}">{% endif %}
             {% if f_sponsor_ja_nein %}<input type="hidden" name="f_sponsor_ja_nein" value="{{ f_sponsor_ja_nein }}">{% endif %}
+            {% if f_validiert %}<input type="hidden" name="f_validiert" value="{{ f_validiert }}">{% endif %}
         </form>
         {% for p in range(1, total_pages+1) %}
             {% if p == page %}
                 <span class="current">{{p}}</span>
             {% else %}
-                <a href="?page={{p}}&per_page={{per_page}}{% if search %}&search={{ search }}{% endif %}{% if f_angefragt %}&f_angefragt={{ f_angefragt }}{% endif %}{% if f_rueckmeldung %}&f_rueckmeldung={{ f_rueckmeldung }}{% endif %}{% if f_sponsor_ja_nein %}&f_sponsor_ja_nein={{ f_sponsor_ja_nein }}{% endif %}">{{p}}</a>
+                <a href="?page={{p}}&per_page={{per_page}}{% if search %}&search={{ search }}{% endif %}{% if f_angefragt %}&f_angefragt={{ f_angefragt }}{% endif %}{% if f_rueckmeldung %}&f_rueckmeldung={{ f_rueckmeldung }}{% endif %}{% if f_sponsor_ja_nein %}&f_sponsor_ja_nein={{ f_sponsor_ja_nein }}{% endif %}{% if f_validiert %}&f_validiert={{ f_validiert }}{% endif %}">{{p}}</a>
             {% endif %}
         {% endfor %}
     </div>
@@ -311,7 +321,7 @@ HTML = """
         </tbody>
     </table>
 
-    <!-- Pagination und Per-Page Auswahl unten -->
+    <!-- Pagination und Per-Page Auswahl unten (wie oben!) -->
     <div class="pagination">
         <form method="get" class="per-page-form" style="display:inline;">
             <label for="per_page_bottom">Zeilen pro Seite:</label>
@@ -325,19 +335,19 @@ HTML = """
             {% if f_angefragt %}<input type="hidden" name="f_angefragt" value="{{ f_angefragt }}">{% endif %}
             {% if f_rueckmeldung %}<input type="hidden" name="f_rueckmeldung" value="{{ f_rueckmeldung }}">{% endif %}
             {% if f_sponsor_ja_nein %}<input type="hidden" name="f_sponsor_ja_nein" value="{{ f_sponsor_ja_nein }}">{% endif %}
+            {% if f_validiert %}<input type="hidden" name="f_validiert" value="{{ f_validiert }}">{% endif %}
         </form>
         {% for p in range(1, total_pages+1) %}
             {% if p == page %}
                 <span class="current">{{p}}</span>
             {% else %}
-                <a href="?page={{p}}&per_page={{per_page}}{% if search %}&search={{ search }}{% endif %}{% if f_angefragt %}&f_angefragt={{ f_angefragt }}{% endif %}{% if f_rueckmeldung %}&f_rueckmeldung={{ f_rueckmeldung }}{% endif %}{% if f_sponsor_ja_nein %}&f_sponsor_ja_nein={{ f_sponsor_ja_nein }}{% endif %}">{{p}}</a>
+                <a href="?page={{p}}&per_page={{per_page}}{% if search %}&search={{ search }}{% endif %}{% if f_angefragt %}&f_angefragt={{ f_angefragt }}{% endif %}{% if f_rueckmeldung %}&f_rueckmeldung={{ f_rueckmeldung }}{% endif %}{% if f_sponsor_ja_nein %}&f_sponsor_ja_nein={{ f_sponsor_ja_nein }}{% endif %}{% if f_validiert %}&f_validiert={{ f_validiert }}{% endif %}">{{p}}</a>
             {% endif %}
         {% endfor %}
     </div>
 </body>
 </html>
 """
-
 
 def bool_and_info(val):
     if val is None:
@@ -352,7 +362,6 @@ def bool_and_info(val):
     if s.startswith("nein"):
         return 0, val
     return 0, val
-
 
 @sponsoren_bp.route('/', methods=['GET', 'POST'])
 def index():
@@ -385,13 +394,14 @@ def index():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
-                       INSERT INTO sponsor (name, adresse, wichtig, angefragt, rueckmeldung, sponsor_ja_nein,
-                                            info, gegenleistung, was, sponsoring_2024, validiert)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                       """, (
-                           name, adresse, wichtig, angefragt_bool, rueckmeldung_bool, sponsor_bool,
-                           info, gegenleistung, was, sponsoring_2024, validiert
-                       ))
+            INSERT INTO sponsor (
+                name, adresse, wichtig, angefragt, rueckmeldung, sponsor_ja_nein,
+                info, gegenleistung, was, sponsoring_2024, validiert
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            name, adresse, wichtig, angefragt_bool, rueckmeldung_bool, sponsor_bool,
+            info, gegenleistung, was, sponsoring_2024, validiert
+        ))
         sponsor_id = cursor.lastrowid
         for mail in emails:
             cursor.execute("INSERT INTO mailadresse (sponsor_id, mail) VALUES (?, ?)", (sponsor_id, mail))
@@ -404,6 +414,7 @@ def index():
     f_angefragt = request.args.get('f_angefragt', '')
     f_rueckmeldung = request.args.get('f_rueckmeldung', '')
     f_sponsor_ja_nein = request.args.get('f_sponsor_ja_nein', '')
+    f_validiert = request.args.get('f_validiert', '')
     try:
         page = int(request.args.get('page', 1))
     except ValueError:
@@ -430,6 +441,9 @@ def index():
     if f_sponsor_ja_nein in ('0', '1'):
         where.append("sponsor_ja_nein = ?")
         params.append(int(f_sponsor_ja_nein))
+    if f_validiert in ('0', '1'):
+        where.append("validiert = ?")
+        params.append(int(f_validiert))
 
     where_sql = "WHERE " + " AND ".join(where) if where else ""
     count_sql = f"SELECT COUNT(*) FROM sponsor {where_sql}"
@@ -452,8 +466,7 @@ def index():
     sponsoren = []
     for sponsor_row in rows:
         sponsor = dict(sponsor_row)
-        emails = [row['mail'] for row in
-                  cursor.execute("SELECT mail FROM mailadresse WHERE sponsor_id = ?", (sponsor['id'],))]
+        emails = [row['mail'] for row in cursor.execute("SELECT mail FROM mailadresse WHERE sponsor_id = ?", (sponsor['id'],))]
         sponsor['emails'] = emails
         sponsoren.append(sponsor)
     conn.close()
@@ -469,9 +482,9 @@ def index():
         f_angefragt=f_angefragt,
         f_rueckmeldung=f_rueckmeldung,
         f_sponsor_ja_nein=f_sponsor_ja_nein,
+        f_validiert=f_validiert,
         current_user=current_user
     )
-
 
 @sponsoren_bp.route('/validate/<int:sponsor_id>', methods=['POST'])
 def validate_sponsor(sponsor_id):
@@ -484,7 +497,6 @@ def validate_sponsor(sponsor_id):
     conn.close()
     return redirect(request.referrer or url_for('sponsoren.index'))
 
-
 @sponsoren_bp.route('/edit', methods=['POST'])
 def edit_cell():
     data = request.get_json()
@@ -492,8 +504,7 @@ def edit_cell():
     field = data.get('field')
     value = data.get('value')
 
-    allowed_fields = {'name', 'adresse', 'wichtig', 'angefragt', 'rueckmeldung', 'sponsor_ja_nein', 'info',
-                      'gegenleistung', 'was', 'sponsoring_2024'}
+    allowed_fields = {'name', 'adresse', 'wichtig', 'angefragt', 'rueckmeldung', 'sponsor_ja_nein', 'info', 'gegenleistung', 'was', 'sponsoring_2024'}
     if field not in allowed_fields:
         return jsonify({'error': 'Ungültiges Feld'}), 400
 
